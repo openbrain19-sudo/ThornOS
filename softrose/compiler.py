@@ -378,10 +378,10 @@ def compile_source(source, output_path=None, keep_asm=False):
 
     # find spine64 assembler
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    assembler = os.path.join(script_dir, '..', 'spine64', 'assembler.py')
+    assembler = os.path.join(script_dir, '..', 'thornasm', 'assembler.py')
 
     result = subprocess.run(
-        ['python', assembler, asm_path, bin_path, '--bin'],
+        ['python', assembler, asm_path, bin_path, '--elf'],
         capture_output=True, text=True
     )
 
