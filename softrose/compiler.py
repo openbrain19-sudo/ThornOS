@@ -281,6 +281,13 @@ class Compiler:
             self.compile_binary(expr)
         elif isinstance(expr, UnaryOp):
             self.compile_unary(expr)
+        elif isinstance(expr, IndexExpr):
+            # source[index] -> load byte from address (source + index)
+            self.compile_expr(expr.target)
+            self.emit(f'        move r1 ret')
+            self.compile_expr(expr.index)
+            self.emit(f'        add r1 ret')
+            self.emit(f'        move.1 ret [r1]')
 
     def compile_binary(self, expr):
         # evaluate left into r1

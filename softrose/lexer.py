@@ -22,6 +22,8 @@ class TT(Enum):
     OR = auto()
     NOT = auto()
     ASSIGN = auto()
+    LBRACKET = auto()
+    RBRACKET = auto()
     LPAREN = auto()
     RPAREN = auto()
     LBRACE = auto()
@@ -194,6 +196,10 @@ class Lexer:
                 self.emit(TT.LPAREN, '('); self.advance(); continue
             if ch == ')':
                 self.emit(TT.RPAREN, ')'); self.advance(); continue
+            if ch == '[':
+                self.emit(TT.LBRACKET, '['); self.advance(); continue
+            if ch == ']':
+                self.emit(TT.RBRACKET, ']'); self.advance(); continue
             if ch == '{':
                 self.emit(TT.LBRACE, '{'); self.advance(); continue
             if ch == '}':

@@ -1,58 +1,166 @@
 # SoftRose compiler - written in Thorn
 # compiles Thorn source to ThornASM assembly
-# bootstrap: compile with python softrose, then it compiles itself
 
 task start() {
-    write("SoftRose v0.1 bootstrapped\n")
-    source = "task main write hello end"
-    len = 25
-    tokens = tokenize(source, len)
-    asm = generate(tokens)
-    write(asm)
-    write("bootstrap done\n")
-}
-
-task tokenize(source, len) {
+    write("SoftRose v0.1\n")
+    source = "task main write hello world end"
+    len = 31
     pos = 0
-    token_count = 0
+    out = ""
+    out = out + "module data\n"
+    out = out + "    msg hello world\n"
+    out = out + "\nmodule reserve\n"
+    out = out + "    _stack 16384\n"
+    out = out + "\nmodule code\n"
+    pos = 0
+    fn_count = 0
     loop(pos < len) {
-        ch = source[pos]
-        if (ch == 32) {
-            pos = pos + 1
+        if (match_at(source, pos, "task")) {
+            pos = pos + 4
+            pos = skip_sp(source, pos, len)
+            ns = pos
+            ne = word_end(source, pos, len)
+            out = out + "\n    fn global "
+            out = out + sub(source, ns, ne)
+            out = out + "\n    start\n"
+            out = out + "        push sbp\n"
+            out = out + "        move sbp stp\n"
+            pos = ne
+            pos = skip_sp(source, pos, len)
+            if (pos < len && source[pos] == 123) {
+                pos = pos + 1
+                bs = pos
+                depth = 1
+                loop(depth > 0 && pos < len) {
+                    if (source[pos] == 123) { depth = depth + 1 }
+                    if (source[pos] == 125) { depth = depth - 1 }
+                    pos = pos + 1
+                }
+                be = pos - 1
+                out = compile_body(out, source, bs, be)
+            }
+            out = out + "        move ret 0\n"
+            out = out + "        move stp sbp\n"
+            out = out + "        pop sbp\n"
+            out = out + "        return\n"
+            out = out + "    end\n"
+            fn_count = fn_count + 1
         } else {
-            token_count = token_count + 1
             pos = pos + 1
         }
     }
-    send token_count
+    out = out + "\n    fn global _start\n"
+    out = out + "    begin\n"
+    out = out + "        call start\n"
+    out = out + "        move ret 0\n"
+    out = out + "        syscall\n"
+    out = out + "    end\n"
+    write(out)
+    write("\ncompiled ")
+    wnum(fn_count)
+    write(" functions\n")
 }
 
-task generate(tokens) {
-    asm = "module data\n"
-    asm = asm + "    msg hello world\n"
-    asm = asm + "\nmodule reserve\n"
-    asm = asm + "    _stack 16384\n"
-    asm = asm + "\nmodule code\n"
-    asm = asm + "\n    fn global main\n"
-    asm = asm + "    start\n"
-    asm = asm + "        push sbp\n"
-    asm = asm + "        move sbp stp\n"
-    asm = asm + "        lma ret msg\n"
-    asm = asm + "        move dst 1\n"
-    asm = asm + "        move src ret\n"
-    asm = asm + "        move dta 12\n"
-    asm = asm + "        move ret 1\n"
-    asm = asm + "        syscall\n"
-    asm = asm + "        move ret 0\n"
-    asm = asm + "        move stp sbp\n"
-    asm = asm + "        pop sbp\n"
-    asm = asm + "        return\n"
-    asm = asm + "    end\n"
-    asm = asm + "\n    fn global _start\n"
-    asm = asm + "    start\n"
-    asm = asm + "        call main\n"
-    asm = asm + "        move ret 0\n"
-    asm = asm + "        syscall\n"
-    asm = asm + "    end\n"
-    send asm
+task compile_body(out, source, body_s, body_e) {
+    p = body_s
+    so = 0
+    loop(p < body_e) {
+        if (match_at(source, p, "write(")) {
+            p = p + 6
+            loop(p < body_e && source[p] != 34) { p = p + 1 }
+            if (p < body_e) {
+                p = p + 1
+                ss = p
+                loop(p < body_e && source[p] != 34) { p = p + 1 }
+                se = p
+                sl = se - ss
+                out = out + "        lma ret str_"
+                out = out + nstr(so)
+                out = out + "\n        move dst 1\n        move src ret\n        move dta "
+                out = out + nstr(sl)
+                out = out + "\n        move ret 1\n        syscall\n"
+                so = so + 1
+                p = p + 1
+                loop(p < body_e && source[p] == 32) { p = p + 1 }
+                if (p < body_e && source[p] == 41) { p = p + 1 }
+            }
+        } elif (match_at(source, p, "send ")) {
+            p = p + 5
+            loop(p < body_e && source[p] != 10 && source[p] != 125) { p = p + 1 }
+            out = out + "        move ret 0\n"
+        } else {
+            p = p + 1
+        }
+    }
+    send out
+}
+
+task match_at(source, pos, pat) {
+    pl = slen(pat)
+    i = 0
+    ok = 1
+    loop(i < pl) {
+        if (pos + i >= 31) { ok = 0; break }
+        if (source[pos + i] != pat[i]) { ok = 0; break }
+        i = i + 1
+    }
+    send ok
+}
+
+task skip_sp(source, pos, length) {
+    loop(pos < length) {
+        ch = source[pos]
+        if (ch == 32 || ch == 9 || ch == 10) { pos = pos + 1 } else { break }
+    }
+    send pos
+}
+
+task word_end(source, pos, length) {
+    loop(pos < length) {
+        ch = source[pos]
+        if (ch == 32 || ch == 9 || ch == 10 || ch == 40 || ch == 123) { break }
+        pos = pos + 1
+    }
+    send pos
+}
+
+task slen(s) {
+    l = 0
+    loop(s[l] != 0) { l = l + 1 }
+    send l
+}
+
+task sub(s, a, b) {
+    r = ""
+    i = a
+    loop(i < b) { r = r + s[i]; i = i + 1 }
+    send r
+}
+
+task nstr(n) {
+    if (n == 0) { send "0" }
+    r = ""
+    loop(n > 0) {
+        d = n - (n / 10) * 10
+        r = chr(48 + d) + r
+        n = n / 10
+    }
+    send r
+}
+
+task wnum(n) { write(nstr(n)) }
+
+task chr(c) {
+    s = ""
+    if (c == 48) { s = "0" }
+    if (c == 49) { s = "1" }
+    if (c == 50) { s = "2" }
+    if (c == 51) { s = "3" }
+    if (c == 52) { s = "4" }
+    if (c == 53) { s = "5" }
+    if (c == 54) { s = "6" }
+    if (c == 55) { s = "7" }
+    if (c == 56) { s = "8" }
+    if (c == 57) { s = "9" }
+    send s
 }

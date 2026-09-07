@@ -37,6 +37,11 @@ class UnaryOp:
     operand: 'Expr'
 
 @dataclass
+class IndexExpr:
+    target: 'Expr'
+    index: 'Expr'
+
+@dataclass
 class FuncCall:
     name: str
     args: list
@@ -436,8 +441,16 @@ class Parser:
                 self.advance()  # (
                 args = self.parse_args()
                 self.expect(TT.RPAREN)
-                return FuncCall(name=tok.value, args=args)
-            return Ident(name=tok.value)
+                result = FuncCall(name=tok.value, args=args)
+            else:
+                result = Ident(name=tok.value)
+            # check for array indexing: expr[index]
+            while self.peek() and self.peek().type == TT.LBRACKET:
+                self.advance()  # [
+                index = self.parse_expr()
+                self.expect(TT.RBRACKET)
+                result = IndexExpr(target=result, index=index)
+            return result
 
         if tok.type == TT.LPAREN:
             self.advance()
