@@ -1,36 +1,34 @@
 origin 0x7C00
 
-module data
-    greeting "Greetings, from ThornOS\n"
-
 module code
     fn global _start
     start
-        # print greeting using BIOS int 10h, AH=0Eh (teletype)
-        move r1 0          # string index
+        # print greeting using BIOS int 10h
+        # string is embedded after this code
+        move r1 0
 
     print_loop:
-        # load character from greeting[r1]
-        move r2 greeting
-        add r2 r1
+        # calculate string address: current position + offset to string
+        # string is at a fixed position after the code
+        move r2 0x7C00
+        add r2 0x3E       # offset past BPB area
+        add r2 r1         # + character index
+        add r2 code_size  # + code size (will be patched)
         move.1 ret [r2]
 
-        # check for null terminator
         cmp ret == 0 go done
 
-        # print character: int 10h, AH=0Eh, AL=char, BH=0, BL=07h
-        move r3 ret        # save char
-        move ret 0x0E      # AH = teletype
-        move dst 0         # BH = page 0
-        move dta 0x07      # BL = color (light gray)
-        move src r3        # AL = character
+        move r3 ret
+        move ret 0x0E
+        move dst 0
+        move dta 0x07
+        move src r3
         int 0x10
 
-        # next character
         inc r1
         go print_loop
 
     done:
-        # halt
         hlt
-    end
+
+    code_size:

@@ -2,6 +2,8 @@
 
 The operating system project. Built from scratch in assembly and a custom programming language.
 
+![ThornOS booting](screenshot.png)
+
 ## Components
 
 ### ThornASM (`thornasm/`)
@@ -16,6 +18,14 @@ SoftRose programming language compiler. Compiles `.rose` source to ThornASM asse
 
 ```
 python softrose/softrose.py hello.rose hello.bin
+```
+
+### OS (`os/`)
+Bootloader written in ThornASM. Prints "Greetings, from ThornOS" on boot.
+
+```
+python os/build.py
+qemu-system-x86_64 -fda ThornOS.img
 ```
 
 ## SoftRose Language
