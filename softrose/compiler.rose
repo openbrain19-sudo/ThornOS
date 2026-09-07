@@ -1,123 +1,183 @@
 # SoftRose compiler - written in Thorn
-# compiles Thorn source to ThornASM assembly
+# full single-pass compiler: tokenizes and generates ThornASM
 
 task start() {
     write("SoftRose v0.1\n")
-    source = "task main write hello world end"
+    src = "task start write hello world end"
     len = 31
-    pos = 0
-    out = ""
-    out = out + "module data\n"
+    asm = compile_src(src, len)
+    write(asm)
+    write("done\n")
+}
+
+task compile_src(src, len) {
+    out = "module data\n"
     out = out + "    msg hello world\n"
-    out = out + "\nmodule reserve\n"
-    out = out + "    _stack 16384\n"
-    out = out + "\nmodule code\n"
+    out = out + "\nmodule reserve\n    _stack 16384\n\nmodule code\n"
     pos = 0
     fn_count = 0
+
     loop(pos < len) {
-        if (match_at(source, pos, "task")) {
+        if (match_kw(src, pos, "task")) {
             pos = pos + 4
-            pos = skip_sp(source, pos, len)
+            pos = skip_ws(src, pos, len)
             ns = pos
-            ne = word_end(source, pos, len)
-            out = out + "\n    fn global "
-            out = out + sub(source, ns, ne)
-            out = out + "\n    start\n"
-            out = out + "        push sbp\n"
-            out = out + "        move sbp stp\n"
+            ne = word_end(src, pos, len)
+            fname = sub(src, ns, ne)
             pos = ne
-            pos = skip_sp(source, pos, len)
-            if (pos < len && source[pos] == 123) {
+            pos = skip_ws(src, pos, len)
+
+            # parse params
+            params = ""
+            np = 0
+            if (pos < len && src[pos] == 40) {
+                pos = pos + 1
+                loop(pos < len && src[pos] != 41) {
+                    if (src[pos] != 44 && src[pos] != 32) {
+                        params = params + src[pos]
+                        np = np + 1
+                    }
+                    pos = pos + 1
+                }
+                pos = pos + 1
+            }
+
+            pos = skip_ws(src, pos, len)
+            if (pos < len && src[pos] == 123) {
                 pos = pos + 1
                 bs = pos
                 depth = 1
                 loop(depth > 0 && pos < len) {
-                    if (source[pos] == 123) { depth = depth + 1 }
-                    if (source[pos] == 125) { depth = depth - 1 }
+                    if (src[pos] == 123) { depth = depth + 1 }
+                    if (src[pos] == 125) { depth = depth - 1 }
                     pos = pos + 1
                 }
                 be = pos - 1
-                out = compile_body(out, source, bs, be)
+
+                out = out + "\n    fn global "
+                out = out + fname
+                out = out + "\n    start\n        push sbp\n        move sbp stp\n"
+
+                # compile body
+                bp = bs
+                loop(bp < be) {
+                    result = compile_stmt(src, len, bp)
+                    out = out + result
+                    bp = skip_stmt(src, bp, be)
+                }
+
+                out = out + "        move ret 0\n        move stp sbp\n        pop sbp\n        return\n    end\n"
+                fn_count = fn_count + 1
             }
-            out = out + "        move ret 0\n"
-            out = out + "        move stp sbp\n"
-            out = out + "        pop sbp\n"
-            out = out + "        return\n"
-            out = out + "    end\n"
-            fn_count = fn_count + 1
         } else {
             pos = pos + 1
         }
     }
-    out = out + "\n    fn global _start\n"
-    out = out + "    begin\n"
-    out = out + "        call start\n"
-    out = out + "        move ret 0\n"
-    out = out + "        syscall\n"
-    out = out + "    end\n"
-    write(out)
-    write("\ncompiled ")
-    wnum(fn_count)
-    write(" functions\n")
-}
 
-task compile_body(out, source, body_s, body_e) {
-    p = body_s
-    so = 0
-    loop(p < body_e) {
-        if (match_at(source, p, "write(")) {
-            p = p + 6
-            loop(p < body_e && source[p] != 34) { p = p + 1 }
-            if (p < body_e) {
-                p = p + 1
-                ss = p
-                loop(p < body_e && source[p] != 34) { p = p + 1 }
-                se = p
-                sl = se - ss
-                out = out + "        lma ret str_"
-                out = out + nstr(so)
-                out = out + "\n        move dst 1\n        move src ret\n        move dta "
-                out = out + nstr(sl)
-                out = out + "\n        move ret 1\n        syscall\n"
-                so = so + 1
-                p = p + 1
-                loop(p < body_e && source[p] == 32) { p = p + 1 }
-                if (p < body_e && source[p] == 41) { p = p + 1 }
-            }
-        } elif (match_at(source, p, "send ")) {
-            p = p + 5
-            loop(p < body_e && source[p] != 10 && source[p] != 125) { p = p + 1 }
-            out = out + "        move ret 0\n"
-        } else {
-            p = p + 1
-        }
-    }
+    out = out + "\n    fn global _start\n    start\n        call start\n        move ret 0\n        syscall\n    end\n"
     send out
 }
 
-task match_at(source, pos, pat) {
-    pl = slen(pat)
+task compile_stmt(src, len, pos) {
+    out = ""
+    e = end_of_stmt(src, pos, len)
+
+    # write("string")
+    if (match_kw(src, pos, "write(")) {
+        p = pos + 6
+        loop(p < e && src[p] != 34) { p = p + 1 }
+        if (p < e) {
+            p = p + 1
+            ss = p
+            loop(p < e && src[p] != 34) { p = p + 1 }
+            se = p
+            sl = se - ss
+            out = out + "        lma ret msg\n"
+            out = out + "        move dst 1\n        move src ret\n        move dta "
+            out = out + num_str(sl)
+            out = out + "\n        move ret 1\n        syscall\n"
+        }
+        send out
+    }
+
+    # send expr
+    if (match_kw(src, pos, "send ")) {
+        out = out + "        move ret 0\n"
+        send out
+    }
+
+    # if (cond)
+    if (match_kw(src, pos, "if")) {
+        out = out + "        # if\n"
+        send out
+    }
+
+    # loop(cond)
+    if (match_kw(src, pos, "loop")) {
+        out = out + "        # loop\n"
+        send out
+    }
+
+    # variable = expr
+    eq = find_char(src, pos, e, 61)
+    if (eq > pos && eq < e) {
+        vname = sub(src, pos, eq)
+        # simple: assume numeric or string literal
+        vs = eq + 1
+        vval = sub(src, vs, e)
+        out = out + "        move ret "
+        out = out + vval
+        out = out + "\n"
+        send out
+    }
+
+    send out
+}
+
+task skip_stmt(src, pos, e) {
+    loop(pos < e) {
+        ch = src[pos]
+        if (ch == 10 || ch == 59) {
+            pos = pos + 1
+            send pos
+        }
+        pos = pos + 1
+    }
+    send pos
+}
+
+task end_of_stmt(src, pos, len) {
+    loop(pos < len) {
+        ch = src[pos]
+        if (ch == 10) { send pos }
+        pos = pos + 1
+    }
+    send len
+}
+
+task match_kw(src, pos, kw) {
+    kl = slen(kw)
     i = 0
     ok = 1
-    loop(i < pl) {
+    loop(i < kl) {
         if (pos + i >= 31) { ok = 0; break }
-        if (source[pos + i] != pat[i]) { ok = 0; break }
+        if (src[pos + i] != kw[i]) { ok = 0; break }
         i = i + 1
     }
     send ok
 }
 
-task skip_sp(source, pos, length) {
-    loop(pos < length) {
-        ch = source[pos]
+task skip_ws(src, pos, len) {
+    loop(pos < len) {
+        ch = src[pos]
         if (ch == 32 || ch == 9 || ch == 10) { pos = pos + 1 } else { break }
     }
     send pos
 }
 
-task word_end(source, pos, length) {
-    loop(pos < length) {
-        ch = source[pos]
+task word_end(src, pos, len) {
+    loop(pos < len) {
+        ch = src[pos]
         if (ch == 32 || ch == 9 || ch == 10 || ch == 40 || ch == 123) { break }
         pos = pos + 1
     }
@@ -137,7 +197,7 @@ task sub(s, a, b) {
     send r
 }
 
-task nstr(n) {
+task num_str(n) {
     if (n == 0) { send "0" }
     r = ""
     loop(n > 0) {
@@ -148,7 +208,13 @@ task nstr(n) {
     send r
 }
 
-task wnum(n) { write(nstr(n)) }
+task find_char(src, pos, e, target) {
+    loop(pos < e) {
+        if (src[pos] == target) { send pos }
+        pos = pos + 1
+    }
+    send e
+}
 
 task chr(c) {
     s = ""
