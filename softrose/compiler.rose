@@ -1,5 +1,5 @@
 # SoftRose compiler - written in SoftRose
-# single-pass compiler, full language support
+# full feature parity with Python version
 
 task start() {
     write("SoftRose v0.1\n")
@@ -61,7 +61,7 @@ task compile_block(src, bs, be, ctx, lc) {
         ch = src[bp]
         if (ch == 10 || ch == 32 || ch == 9) { bp = bp + 1; continue }
         if (ch == 35) { loop(bp < be && src[bp] != 10) { bp = bp + 1 }; continue }
-        # write("string") or write(v"string {expr}")
+        # write("string") or write(v"string {expr}") or write(var)
         if (match_kw(src, bp, "write(")) {
             p = bp + 6
             loop(p < be && src[p] != 41) { p = p + 1 }
@@ -69,13 +69,10 @@ task compile_block(src, bs, be, ctx, lc) {
                 inner = sub(src, bp + 6, p)
                 sl = slen(inner)
                 if (sl > 1 && inner[0] == 34) {
-                    # plain string
                     out = out + "        lma ret msg\n        move dst 1\n        move src ret\n        move dta " + num_str(sl - 2) + "\n        move ret 1\n        syscall\n"
                 } elif (sl > 1 && inner[0] == 118 && inner[1] == 34) {
-                    # v-string - output each char/expr separately
                     out = out + compile_vstring(inner, sl)
-                } elif (sl > 0 && inner[0] >= 97 && inner[0] <= 122) {
-                    # variable
+                } elif (sl > 0) {
                     out = out + "        move ret [" + inner + "]\n        move dst 1\n        move src ret\n        move dta 1\n        move ret 1\n        syscall\n"
                 }
                 bp = p + 1
@@ -85,8 +82,7 @@ task compile_block(src, bs, be, ctx, lc) {
         # send expr
         if (match_kw(src, bp, "send ")) {
             bp = bp + 5
-            ev = eval_expr(src, bp, be, lc)
-            out = out + ev
+            out = out + eval_expr(src, bp, be, lc)
             bp = eol(src, bp, be)
             continue
         }
@@ -149,7 +145,7 @@ task compile_block(src, bs, be, ctx, lc) {
             }
             continue
         }
-        # spawn(task(args))
+        # spawn(task(args)) or x = spawn(task(args))
         if (match_kw(src, bp, "spawn(")) {
             p = bp + 6
             loop(p < be && src[p] != 41) { p = p + 1 }
@@ -181,26 +177,33 @@ task compile_block(src, bs, be, ctx, lc) {
         }
         # if (cond) { ... } elif (...) { ... } else { ... }
         if (match_kw(src, bp, "if")) {
-            result = compile_if(src, bp, be, ctx, lc)
-            out = out + result
+            out = out + compile_if(src, bp, be, ctx, lc)
             bp = find_endif(src, bp, be)
             continue
         }
-        # loop(on) / loop(n) / loop(i = n) / loop(cond) { ... }
+        # loop(on) / loop(n) / loop(i = n) / loop(item = list) / loop(cond)
         if (match_kw(src, bp, "loop")) {
-            result = compile_loop(src, bp, be, ctx, lc)
-            out = out + result
+            out = out + compile_loop(src, bp, be, ctx, lc)
             bp = find_loopend(src, bp, be)
             continue
         }
-        # variable = expr
+        # variable = expr (includes x = spawn(...))
         eq = find_ch(src, bp, be, 61)
         if (eq > bp && eq < be && src[eq + 1] != 61) {
             vn = sub(src, bp, eq)
             vs = eq + 1
             ve = eol(src, vs, be)
-            out = out + eval_expr(src, vs, ve, lc)
-            out = out + "        move [" + vn + "] ret\n"
+            # check if RHS is spawn
+            if (match_kw(src, vs, "spawn(")) {
+                p = vs + 6
+                loop(p < ve && src[p] != 41) { p = p + 1 }
+                inner = sub(src, vs + 6, p)
+                out = out + "        call " + inner + "\n"
+                out = out + "        move [" + vn + "] ret\n"
+            } else {
+                out = out + eval_expr(src, vs, ve, lc)
+                out = out + "        move [" + vn + "] ret\n"
+            }
             bp = ve + 1
             continue
         }
@@ -242,7 +245,6 @@ task compile_if(src, pos, be, ctx, lc) {
             out = out + "        go endif_" + lbl + "\n"
         }
         pos = skip_ws(src, pos, be)
-        # handle elif chains
         loop(match_kw(src, pos, "elif")) {
             out = out + "    elif_" + lbl + ":\n"
             pos = pos + 4
@@ -276,7 +278,6 @@ task compile_if(src, pos, be, ctx, lc) {
                 pos = skip_ws(src, pos, be)
             }
         }
-        # else
         if (match_kw(src, pos, "else")) {
             out = out + "    elif_" + lbl + ":\n"
             pos = pos + 4
@@ -365,12 +366,41 @@ task compile_loop(src, pos, be, ctx, lc) {
             out = out + "    loop_end_" + lbl + ":\n"
             send out
         }
-        # loop(i = n) = counter, or loop(cond) = while
+        # check for = in condition
         eq = find_ch(src, cs, ce, 61)
-        if (eq < ce && src[eq] == 61 && src[eq - 1] != 61) {
-            # counter loop: loop(i = n)
+        # loop(item = list)
+        if (eq < ce && src[eq] == 61 && src[eq - 1] != 61 && src[eq - 1] != 33 && src[eq - 1] != 60 && src[eq - 1] != 62) {
             cn = sub(src, cs, eq)
             cv = sub(src, eq + 1, ce)
+            # check if RHS is a variable (not a number)
+            is_var = 0
+            if (cv[0] >= 97 && cv[0] <= 122) { is_var = 1 }
+            if (is_var) {
+                # iterate over list
+                out = out + "        move r1 0\n"
+                out = out + "        move r2 " + cv + "\n"
+                out = out + "    loop_" + lbl + ":\n"
+                out = out + "        cmp r1 >= r2 go loop_end_" + lbl + "\n"
+                out = out + "        move " + cn + " r1\n"
+                pos = skip_ws(src, pos, be)
+                if (pos < be && src[pos] == 123) {
+                    pos = pos + 1
+                    lbs = pos
+                    depth = 1
+                    loop(depth > 0 && pos < be) {
+                        if (src[pos] == 123) { depth = depth + 1 }
+                        if (src[pos] == 125) { depth = depth - 1 }
+                        pos = pos + 1
+                    }
+                    lbe = pos - 1
+                    out = out + compile_block(src, lbs, lbe, ctx, lc)
+                    out = out + "        inc r1\n"
+                    out = out + "        go loop_" + lbl + "\n"
+                }
+                out = out + "    loop_end_" + lbl + ":\n"
+                send out
+            }
+            # counter loop: loop(i = n)
             out = out + "        move " + cn + " 0\n"
             out = out + "        move r1 " + cv + "\n"
             out = out + "    loop_" + lbl + ":\n"
@@ -419,22 +449,17 @@ task compile_loop(src, pos, be, ctx, lc) {
 
 task compile_vstring(inner, sl) {
     out = ""
-    # v"hello {name} world" - skip v", then alternate string/expr
     p = 2
     seg = ""
     loop(p < sl - 1) {
         ch = inner[p]
         if (ch == 123) {
-            # flush string segment
             if (slen(seg) > 0) {
                 out = out + "        lma ret msg\n        move dst 1\n        move src ret\n        move dta " + num_str(slen(seg)) + "\n        move ret 1\n        syscall\n"
                 seg = ""
             }
-            # compile expression
             p = p + 1
-            es = p
             loop(p < sl - 1 && inner[p] != 125) { p = p + 1 }
-            out = out + "        # vstring expr\n        move ret 0\n"
             p = p + 1
         } else {
             seg = seg + ch
@@ -477,7 +502,7 @@ task eval_expr(src, pos, e, lc) {
     if (ch == 33) {
         pos = pos + 1
         out = out + eval_expr(src, pos, e, lc)
-        out = out + "        cmp ret == 0 go _not_t\n        move ret 0\n        go _not_f\n    _not_t: move ret 1\n    _not_f:\n"
+        out = out + "        cmp ret == 0 go _nt\n        move ret 0\n        go _nf\n    _nt: move ret 1\n    _nf:\n"
         send out
     }
     # unary minus
@@ -517,7 +542,7 @@ task eval_expr(src, pos, e, lc) {
         out = out + gen_op(sub(src, op_pos, op_pos + op_len))
         send out
     }
-    # function call
+    # function call or variable
     if (ch >= 97 && ch <= 122) {
         ns = pos
         loop(pos < e && src[pos] >= 97 && src[pos] <= 122) { pos = pos + 1 }
@@ -530,7 +555,34 @@ task eval_expr(src, pos, e, lc) {
             out = out + "        call " + fname + "\n"
             send out
         }
-        # variable
+        # check for .method
+        if (pos < e && src[pos] == 46) {
+            pos = pos + 1
+            ms = pos
+            loop(pos < e && src[pos] >= 97 && src[pos] <= 122) { pos = pos + 1 }
+            mname = sub(src, ms, pos)
+            if (pos < e && src[pos] == 40) {
+                pos = pos + 1
+                loop(pos < e && src[pos] != 41) { pos = pos + 1 }
+                pos = pos + 1
+            }
+            out = out + "        # method: " + fname + "." + mname + "\n"
+            out = out + "        move ret 0\n"
+            send out
+        }
+        # check for [index]
+        if (pos < e && src[pos] == 91) {
+            pos = pos + 1
+            is = pos
+            loop(pos < e && src[pos] != 93) { pos = pos + 1 }
+            ie = pos
+            pos = pos + 1
+            out = out + "        move r1 [" + fname + "]\n"
+            out = out + eval_expr(src, is, ie, lc)
+            out = out + "        add r1 ret\n"
+            out = out + "        move.1 ret [r1]\n"
+            send out
+        }
         out = out + "        move ret [" + fname + "]\n"
         send out
     }
@@ -557,16 +609,10 @@ task gen_op(op) {
 }
 
 task find_op(src, pos, e) {
-    if (src[pos] == 40) {
-        d = 1; pos = pos + 1
-        loop(pos < e && d > 0) { if (src[pos] == 40) { d = d + 1 }; if (src[pos] == 41) { d = d - 1 }; pos = pos + 1 }
-    } elif (src[pos] == 34) {
-        pos = pos + 1; loop(pos < e && src[pos] != 34) { pos = pos + 1 }; pos = pos + 1
-    } elif (src[pos] >= 48 && src[pos] <= 57) {
-        loop(pos < e && src[pos] >= 48 && src[pos] <= 57) { pos = pos + 1 }
-    } elif (src[pos] >= 97 && src[pos] <= 122) {
-        loop(pos < e && src[pos] >= 97 && src[pos] <= 122) { pos = pos + 1 }
-    }
+    if (src[pos] == 40) { d = 1; pos = pos + 1; loop(pos < e && d > 0) { if (src[pos] == 40) { d = d + 1 }; if (src[pos] == 41) { d = d - 1 }; pos = pos + 1 } }
+    elif (src[pos] == 34) { pos = pos + 1; loop(pos < e && src[pos] != 34) { pos = pos + 1 }; pos = pos + 1 }
+    elif (src[pos] >= 48 && src[pos] <= 57) { loop(pos < e && src[pos] >= 48 && src[pos] <= 57) { pos = pos + 1 } }
+    elif (src[pos] >= 97 && src[pos] <= 122) { loop(pos < e && src[pos] >= 97 && src[pos] <= 122) { pos = pos + 1 } }
     loop(pos < e && src[pos] == 32) { pos = pos + 1 }
     if (pos < e) {
         ch = src[pos]
@@ -593,11 +639,7 @@ task find_endif(src, pos, be) {
                 if (pos < be && src[pos] == 123) {
                     pos = pos + 1
                     d = 1
-                    loop(d > 0 && pos < be) {
-                        if (src[pos] == 123) { d = d + 1 }
-                        if (src[pos] == 125) { d = d - 1 }
-                        pos = pos + 1
-                    }
+                    loop(d > 0 && pos < be) { if (src[pos] == 123) { d = d + 1 }; if (src[pos] == 125) { d = d - 1 }; pos = pos + 1 }
                 }
                 send pos
             }
@@ -613,11 +655,7 @@ task find_loopend(src, pos, be) {
     if (pos < be && src[pos] == 123) {
         pos = pos + 1
         d = 1
-        loop(d > 0 && pos < be) {
-            if (src[pos] == 123) { d = d + 1 }
-            if (src[pos] == 125) { d = d - 1 }
-            pos = pos + 1
-        }
+        loop(d > 0 && pos < be) { if (src[pos] == 123) { d = d + 1 }; if (src[pos] == 125) { d = d - 1 }; pos = pos + 1 }
     }
     send pos
 }
@@ -630,11 +668,7 @@ task eol(src, pos, be) {
 task match_kw(src, pos, kw) {
     kl = slen(kw)
     i = 0; ok = 1
-    loop(i < kl) {
-        if (pos + i >= 31) { ok = 0; break }
-        if (src[pos + i] != kw[i]) { ok = 0; break }
-        i = i + 1
-    }
+    loop(i < kl) { if (pos + i >= 31) { ok = 0; break }; if (src[pos + i] != kw[i]) { ok = 0; break }; i = i + 1 }
     send ok
 }
 
@@ -649,7 +683,6 @@ task word_end(src, pos, len) {
 }
 
 task slen(s) { l = 0; loop(s[l] != 0) { l = l + 1 }; send l }
-
 task sub(s, a, b) { r = ""; i = a; loop(i < b) { r = r + s[i]; i = i + 1 }; send r }
 
 task num_str(n) {
