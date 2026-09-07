@@ -12,13 +12,13 @@ python thornasm/assembler.py source.tsm output.bin --bin
 ```
 
 ### SoftRose (`softrose/`)
-Thorn programming language compiler. Compiles `.rose` source to ThornASM assembly, then assembles to binary.
+SoftRose programming language compiler. Compiles `.rose` source to ThornASM assembly, then assembles to binary.
 
 ```
 python softrose/softrose.py hello.rose hello.bin
 ```
 
-## Thorn Language
+## SoftRose Language
 
 ```rose
 task add(x, y) {

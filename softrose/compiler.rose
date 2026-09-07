@@ -1,5 +1,5 @@
-# SoftRose compiler - written in Thorn
-# full single-pass compiler: tokenizes and generates ThornASM
+# SoftRose compiler - written in SoftRose
+# single-pass compiler: tokenizes and generates ThornASM
 
 task start() {
     write("SoftRose v0.1\n")
@@ -11,12 +11,9 @@ task start() {
 }
 
 task compile_src(src, len) {
-    out = "module data\n"
-    out = out + "    msg hello world\n"
-    out = out + "\nmodule reserve\n    _stack 16384\n\nmodule code\n"
+    out = "module data\n    msg hello world\n\nmodule reserve\n    _stack 16384\n\nmodule code\n"
     pos = 0
     fn_count = 0
-
     loop(pos < len) {
         if (match_kw(src, pos, "task")) {
             pos = pos + 4
@@ -26,22 +23,17 @@ task compile_src(src, len) {
             fname = sub(src, ns, ne)
             pos = ne
             pos = skip_ws(src, pos, len)
-
-            # parse params
             params = ""
-            np = 0
             if (pos < len && src[pos] == 40) {
                 pos = pos + 1
                 loop(pos < len && src[pos] != 41) {
                     if (src[pos] != 44 && src[pos] != 32) {
                         params = params + src[pos]
-                        np = np + 1
                     }
                     pos = pos + 1
                 }
                 pos = pos + 1
             }
-
             pos = skip_ws(src, pos, len)
             if (pos < len && src[pos] == 123) {
                 pos = pos + 1
@@ -53,19 +45,12 @@ task compile_src(src, len) {
                     pos = pos + 1
                 }
                 be = pos - 1
-
-                out = out + "\n    fn global "
-                out = out + fname
-                out = out + "\n    start\n        push sbp\n        move sbp stp\n"
-
-                # compile body
+                out = out + "\n    fn global " + fname + "\n    start\n        push sbp\n        move sbp stp\n"
                 bp = bs
                 loop(bp < be) {
-                    result = compile_stmt(src, len, bp)
-                    out = out + result
-                    bp = skip_stmt(src, bp, be)
+                    out = out + compile_stmt(src, bp, be)
+                    bp = next_stmt(src, bp, be)
                 }
-
                 out = out + "        move ret 0\n        move stp sbp\n        pop sbp\n        return\n    end\n"
                 fn_count = fn_count + 1
             }
@@ -73,15 +58,13 @@ task compile_src(src, len) {
             pos = pos + 1
         }
     }
-
     out = out + "\n    fn global _start\n    start\n        call start\n        move ret 0\n        syscall\n    end\n"
     send out
 }
 
-task compile_stmt(src, len, pos) {
+task compile_stmt(src, pos, be) {
     out = ""
-    e = end_of_stmt(src, pos, len)
-
+    e = eol(src, pos, be)
     # write("string")
     if (match_kw(src, pos, "write(")) {
         p = pos + 6
@@ -90,69 +73,41 @@ task compile_stmt(src, len, pos) {
             p = p + 1
             ss = p
             loop(p < e && src[p] != 34) { p = p + 1 }
-            se = p
-            sl = se - ss
-            out = out + "        lma ret msg\n"
-            out = out + "        move dst 1\n        move src ret\n        move dta "
-            out = out + num_str(sl)
-            out = out + "\n        move ret 1\n        syscall\n"
+            sl = p - ss
+            out = out + "        lma ret msg\n        move dst 1\n        move src ret\n        move dta " + num_str(sl) + "\n        move ret 1\n        syscall\n"
         }
         send out
     }
-
     # send expr
     if (match_kw(src, pos, "send ")) {
         out = out + "        move ret 0\n"
         send out
     }
-
-    # if (cond)
-    if (match_kw(src, pos, "if")) {
-        out = out + "        # if\n"
-        send out
-    }
-
-    # loop(cond)
-    if (match_kw(src, pos, "loop")) {
-        out = out + "        # loop\n"
-        send out
-    }
-
     # variable = expr
-    eq = find_char(src, pos, e, 61)
+    eq = find_ch(src, pos, e, 61)
     if (eq > pos && eq < e) {
-        vname = sub(src, pos, eq)
-        # simple: assume numeric or string literal
+        vn = sub(src, pos, eq)
         vs = eq + 1
-        vval = sub(src, vs, e)
-        out = out + "        move ret "
-        out = out + vval
-        out = out + "\n"
+        out = out + "        move ret " + sub(src, vs, e) + "\n"
         send out
     }
-
     send out
 }
 
-task skip_stmt(src, pos, e) {
-    loop(pos < e) {
-        ch = src[pos]
-        if (ch == 10 || ch == 59) {
-            pos = pos + 1
-            send pos
-        }
+task next_stmt(src, pos, be) {
+    loop(pos < be) {
+        if (src[pos] == 10) { send pos + 1 }
         pos = pos + 1
     }
-    send pos
+    send be
 }
 
-task end_of_stmt(src, pos, len) {
-    loop(pos < len) {
-        ch = src[pos]
-        if (ch == 10) { send pos }
+task eol(src, pos, be) {
+    loop(pos < be) {
+        if (src[pos] == 10) { send pos }
         pos = pos + 1
     }
-    send len
+    send be
 }
 
 task match_kw(src, pos, kw) {
@@ -208,7 +163,7 @@ task num_str(n) {
     send r
 }
 
-task find_char(src, pos, e, target) {
+task find_ch(src, pos, e, target) {
     loop(pos < e) {
         if (src[pos] == target) { send pos }
         pos = pos + 1
