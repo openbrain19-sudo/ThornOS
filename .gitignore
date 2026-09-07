@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
-*.bin
-*.elf
-*.tsm
+*.iso
+
+# keep OS files
+!os/boot.bin
+!os/boot.tsm

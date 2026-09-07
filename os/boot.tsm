@@ -1,0 +1,36 @@
+origin 0x7C00
+
+module data
+    greeting "Greetings, from ThornOS\n"
+
+module code
+    fn global _start
+    start
+        # print greeting using BIOS int 10h, AH=0Eh (teletype)
+        move r1 0          # string index
+
+    print_loop:
+        # load character from greeting[r1]
+        move r2 greeting
+        add r2 r1
+        move.1 ret [r2]
+
+        # check for null terminator
+        cmp ret == 0 go done
+
+        # print character: int 10h, AH=0Eh, AL=char, BH=0, BL=07h
+        move r3 ret        # save char
+        move ret 0x0E      # AH = teletype
+        move dst 0         # BH = page 0
+        move dta 0x07      # BL = color (light gray)
+        move src r3        # AL = character
+        int 0x10
+
+        # next character
+        inc r1
+        go print_loop
+
+    done:
+        # halt
+        hlt
+    end
