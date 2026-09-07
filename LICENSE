@@ -1,0 +1,77 @@
+ThornOS License
+Copyright (c) 2026 Komori Iwakura. All rights reserved.
+
+This license governs the use, modification, and distribution of the
+ThornOS project, including the ThornASM assembler and SoftRose compiler.
+
+1. PERMISSIONS
+
+   a. Private use: You may use, modify, and run this software privately
+      without restriction.
+
+   b. Public use: You may use this software publicly, provided you give
+      clear and visible credit to the original author:
+
+         "Created by Komori Iwakura"
+
+      This credit must appear in any public-facing context, including
+      but not limited to: websites, applications, documentation,
+      presentations, and social media.
+
+2. ATTRIBUTION REQUIREMENTS
+
+   a. If you fork, clone, modify, or derivative this software, you MUST:
+
+      - Clearly state that you did not originally create it.
+      - Credit Komori Iwakura as the original author.
+      - Not present the work as your own creation.
+      - Include this license or a compatible notice in all copies.
+
+   b. Example acceptable attribution:
+
+      "Based on ThornOS by Komori Iwakura (github.com/openbrain19-sudo/ThornOS)"
+
+3. COMMERCIAL RESTRICTION
+
+   a. You may NOT sell, license, or otherwise monetize this software
+      or any derivative of it.
+
+   b. You may NOT use this software as part of a paid product,
+      service, or subscription without express written permission
+      from Komori Iwakura.
+
+   c. This applies to the original software and any forks, clones,
+      or derivatives thereof.
+
+4. OPEN SOURCE REQUIREMENT FOR DERIVATIVES
+
+   a. Any derivative work, fork, or clone of this software MUST be
+      released under the same or a compatible open source license.
+
+   b. Closed-source derivatives are not permitted.
+
+5. NO WARRANTY
+
+   This software is provided "as is" without warranty of any kind,
+   express or implied. The author shall not be held liable for any
+   damages arising from the use of this software.
+
+6. TERMINATION
+
+   This license terminates automatically if you violate any of its
+   terms. Upon termination, you must cease all use and distribution.
+
+7. DEFINITIONS
+
+   "This software" refers to the ThornOS project and all its
+   components, including ThornASM and SoftRose.
+
+   "Derivative work" includes any modified version, fork, port,
+   adaptation, or work based on this software.
+
+   "Commercial use" means any use intended for or resulting in
+   monetary gain.
+
+By using this software, you agree to the terms of this license.
+
+For questions or special permissions, contact Komori Iwakura.
