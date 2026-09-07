@@ -1,0 +1,3 @@
+task start() {
+    write("hello from SoftRose!\n")
+}
