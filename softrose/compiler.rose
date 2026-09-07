@@ -1,5 +1,5 @@
 # SoftRose compiler - written in SoftRose
-# single-pass compiler: tokenizes and generates ThornASM
+# single-pass compiler with if/else, loops, expressions
 
 task start() {
     write("SoftRose v0.1\n")
@@ -23,15 +23,9 @@ task compile_src(src, len) {
             fname = sub(src, ns, ne)
             pos = ne
             pos = skip_ws(src, pos, len)
-            params = ""
             if (pos < len && src[pos] == 40) {
                 pos = pos + 1
-                loop(pos < len && src[pos] != 41) {
-                    if (src[pos] != 44 && src[pos] != 32) {
-                        params = params + src[pos]
-                    }
-                    pos = pos + 1
-                }
+                loop(pos < len && src[pos] != 41) { pos = pos + 1 }
                 pos = pos + 1
             }
             pos = skip_ws(src, pos, len)
@@ -45,12 +39,9 @@ task compile_src(src, len) {
                     pos = pos + 1
                 }
                 be = pos - 1
+                ctx = "fn"
                 out = out + "\n    fn global " + fname + "\n    start\n        push sbp\n        move sbp stp\n"
-                bp = bs
-                loop(bp < be) {
-                    out = out + compile_stmt(src, bp, be)
-                    bp = next_stmt(src, bp, be)
-                }
+                out = out + compile_block(src, bs, be, ctx)
                 out = out + "        move ret 0\n        move stp sbp\n        pop sbp\n        return\n    end\n"
                 fn_count = fn_count + 1
             }
@@ -62,44 +53,268 @@ task compile_src(src, len) {
     send out
 }
 
-task compile_stmt(src, pos, be) {
+task compile_block(src, bs, be, ctx) {
     out = ""
-    e = eol(src, pos, be)
-    # write("string")
-    if (match_kw(src, pos, "write(")) {
-        p = pos + 6
-        loop(p < e && src[p] != 34) { p = p + 1 }
-        if (p < e) {
-            p = p + 1
-            ss = p
-            loop(p < e && src[p] != 34) { p = p + 1 }
-            sl = p - ss
-            out = out + "        lma ret msg\n        move dst 1\n        move src ret\n        move dta " + num_str(sl) + "\n        move ret 1\n        syscall\n"
+    bp = bs
+    lc = 0
+    loop(bp < be) {
+        ch = src[bp]
+        # skip newlines
+        if (ch == 10) { bp = bp + 1; continue }
+        # skip comments
+        if (ch == 35) {
+            loop(bp < be && src[bp] != 10) { bp = bp + 1 }
+            continue
         }
-        send out
-    }
-    # send expr
-    if (match_kw(src, pos, "send ")) {
-        out = out + "        move ret 0\n"
-        send out
-    }
-    # variable = expr
-    eq = find_ch(src, pos, e, 61)
-    if (eq > pos && eq < e) {
-        vn = sub(src, pos, eq)
-        vs = eq + 1
-        out = out + "        move ret " + sub(src, vs, e) + "\n"
-        send out
+        # write("string")
+        if (match_kw(src, bp, "write(")) {
+            p = bp + 6
+            loop(p < be && src[p] != 34) { p = p + 1 }
+            if (p < be) {
+                p = p + 1
+                ss = p
+                loop(p < be && src[p] != 34) { p = p + 1 }
+                sl = p - ss
+                out = out + "        lma ret msg\n        move dst 1\n        move src ret\n        move dta " + num_str(sl) + "\n        move ret 1\n        syscall\n"
+            }
+            bp = p + 1
+            continue
+        }
+        # send expr
+        if (match_kw(src, bp, "send ")) {
+            bp = bp + 5
+            ev = eval_expr(src, bp, be)
+            out = out + ev
+            bp = eol(src, bp, be)
+            continue
+        }
+        # if (cond) { ... } else { ... }
+        if (match_kw(src, bp, "if")) {
+            bp = bp + 2
+            bp = skip_ws(src, bp, be)
+            if (bp < be && src[bp] == 40) {
+                bp = bp + 1
+                cs = bp
+                loop(bp < be && src[bp] != 41) { bp = bp + 1 }
+                ce = bp
+                bp = bp + 1
+                out = out + eval_expr(src, cs, ce)
+                lc = lc + 1
+                lbl = num_str(lc)
+                out = out + "        cmp ret == 0 go else_" + lbl + "\n"
+                bp = skip_ws(src, bp, be)
+                if (bp < be && src[bp] == 123) {
+                    bp = bp + 1
+                    ibs = bp
+                    depth = 1
+                    loop(depth > 0 && bp < be) {
+                        if (src[bp] == 123) { depth = depth + 1 }
+                        if (src[bp] == 125) { depth = depth - 1 }
+                        bp = bp + 1
+                    }
+                    ibe = bp - 1
+                    out = out + compile_block(src, ibs, ibe, ctx)
+                    out = out + "        go endif_" + lbl + "\n"
+                }
+                out = out + "    else_" + lbl + ":\n"
+                bp = skip_ws(src, bp, be)
+                if (match_kw(src, bp, "else")) {
+                    bp = bp + 4
+                    bp = skip_ws(src, bp, be)
+                    if (bp < be && src[bp] == 123) {
+                        bp = bp + 1
+                        ebs = bp
+                        depth = 1
+                        loop(depth > 0 && bp < be) {
+                            if (src[bp] == 123) { depth = depth + 1 }
+                            if (src[bp] == 125) { depth = depth - 1 }
+                            bp = bp + 1
+                        }
+                        ebe = bp - 1
+                        out = out + compile_block(src, ebs, ebe, ctx)
+                    }
+                }
+                out = out + "    endif_" + lbl + ":\n"
+            }
+            continue
+        }
+        # loop(cond) { ... }
+        if (match_kw(src, bp, "loop")) {
+            bp = bp + 4
+            bp = skip_ws(src, bp, be)
+            if (bp < be && src[bp] == 40) {
+                bp = bp + 1
+                cs = bp
+                loop(bp < be && src[bp] != 41) { bp = bp + 1 }
+                ce = bp
+                bp = bp + 1
+                lc = lc + 1
+                lbl = num_str(lc)
+                out = out + "    loop_" + lbl + ":\n"
+                out = out + eval_expr(src, cs, ce)
+                out = out + "        cmp ret == 0 go loop_end_" + lbl + "\n"
+                bp = skip_ws(src, bp, be)
+                if (bp < be && src[bp] == 123) {
+                    bp = bp + 1
+                    lbs = bp
+                    depth = 1
+                    loop(depth > 0 && bp < be) {
+                        if (src[bp] == 123) { depth = depth + 1 }
+                        if (src[bp] == 125) { depth = depth - 1 }
+                        bp = bp + 1
+                    }
+                    lbe = bp - 1
+                    out = out + compile_block(src, lbs, lbe, ctx)
+                    out = out + "        go loop_" + lbl + "\n"
+                }
+                out = out + "    loop_end_" + lbl + ":\n"
+            }
+            continue
+        }
+        # variable = expr
+        eq = find_ch(src, bp, be, 61)
+        if (eq > bp && eq < be && src[eq + 1] != 61) {
+            vn = sub(src, bp, eq)
+            vs = eq + 1
+            ve = eol(src, vs, be)
+            out = out + eval_expr(src, vs, ve)
+            out = out + "        # " + vn + " = result\n"
+            bp = ve + 1
+            continue
+        }
+        bp = bp + 1
     }
     send out
 }
 
-task next_stmt(src, pos, be) {
-    loop(pos < be) {
-        if (src[pos] == 10) { send pos + 1 }
-        pos = pos + 1
+task eval_expr(src, pos, e) {
+    out = ""
+    # skip whitespace
+    loop(pos < e && src[pos] == 32) { pos = pos + 1 }
+    # simple number
+    if (src[pos] >= 48 && src[pos] <= 57) {
+        ns = pos
+        loop(pos < e && src[pos] >= 48 && src[pos] <= 57) { pos = pos + 1 }
+        out = out + "        move ret " + sub(src, ns, pos) + "\n"
+        send out
     }
-    send be
+    # string literal
+    if (src[pos] == 34) {
+        pos = pos + 1
+        ss = pos
+        loop(pos < e && src[pos] != 34) { pos = pos + 1 }
+        sl = pos - ss
+        out = out + "        lma ret msg\n"
+        send out
+    }
+    # unary minus
+    if (src[pos] == 45) {
+        pos = pos + 1
+        out = out + eval_expr(src, pos, e)
+        out = out + "        neg ret\n"
+        send out
+    }
+    # parenthesized expression
+    if (src[pos] == 40) {
+        pos = pos + 1
+        depth = 1
+        ps = pos
+        loop(pos < e && depth > 0) {
+            if (src[pos] == 40) { depth = depth + 1 }
+            if (src[pos] == 41) { depth = depth - 1 }
+            pos = pos + 1
+        }
+        out = out + eval_expr(src, ps, pos - 1)
+        send out
+    }
+    # binary op: look for + - * / == != < > && ||
+    op_pos = find_op(src, pos, e)
+    if (op_pos < e) {
+        out = out + eval_expr(src, pos, op_pos)
+        out = out + "        move r1 ret\n"
+        op = src[op_pos]
+        op_len = 1
+        if (src[op_pos] == 61 && src[op_pos + 1] == 61) { op_len = 2 }
+        if (src[op_pos] == 33 && src[op_pos + 1] == 61) { op_len = 2 }
+        if (src[op_pos] == 60 && src[op_pos + 1] == 61) { op_len = 2 }
+        if (src[op_pos] == 62 && src[op_pos + 1] == 61) { op_len = 2 }
+        if (src[op_pos] == 38 && src[op_pos + 1] == 38) { op_len = 2 }
+        if (src[op_pos] == 124 && src[op_pos + 1] == 124) { op_len = 2 }
+        right_s = op_pos + op_len
+        out = out + eval_expr(src, right_s, e)
+        out = out + "        move r2 ret\n"
+        out = out + gen_op(sub(src, op_pos, op_pos + op_len))
+        send out
+    }
+    # function call
+    if (src[pos] >= 97 && src[pos] <= 122) {
+        ns = pos
+        loop(pos < e && src[pos] != 40 && src[pos] != 32 && src[pos] != 10) { pos = pos + 1 }
+        fname = sub(src, ns, pos)
+        if (pos < e && src[pos] == 40) {
+            pos = pos + 1
+            loop(pos < e && src[pos] != 41) { pos = pos + 1 }
+            pos = pos + 1
+            out = out + "        call " + fname + "\n"
+            send out
+        }
+        out = out + "        # unknown: " + fname + "\n"
+        send out
+    }
+    out = out + "        move ret 0\n"
+    send out
+}
+
+task gen_op(op) {
+    out = ""
+    if (op == "+") { out = out + "        add r1 r2\n        move ret r1\n" }
+    if (op == "-") { out = out + "        sub r1 r2\n        move ret r1\n" }
+    if (op == "*") { out = out + "        mul r1 r2\n        move ret r1\n" }
+    if (op == "/") { out = out + "        move dta 0\n        div r2\n        move ret r1\n" }
+    if (op == "==") { out = out + "        cmp r1 == r2 go _t\n        move ret 0\n        go _f\n    _t: move ret 1\n    _f:\n" }
+    if (op == "!=") { out = out + "        cmp r1 != r2 go _t\n        move ret 0\n        go _f\n    _t: move ret 1\n    _f:\n" }
+    if (op == "<") { out = out + "        cmp r1 < r2 go _t\n        move ret 0\n        go _f\n    _t: move ret 1\n    _f:\n" }
+    if (op == ">") { out = out + "        cmp r1 > r2 go _t\n        move ret 0\n        go _f\n    _t: move ret 1\n    _f:\n" }
+    if (op == "<=") { out = out + "        cmp r1 <= r2 go _t\n        move ret 0\n        go _f\n    _t: move ret 1\n    _f:\n" }
+    if (op == ">=") { out = out + "        cmp r1 >= r2 go _t\n        move ret 0\n        go _f\n    _t: move ret 1\n    _f:\n" }
+    if (op == "&&") { out = out + "        and r1 r2\n        move ret r1\n" }
+    if (op == "||") { out = out + "        or r1 r2\n        move ret r1\n" }
+    send out
+}
+
+task find_op(src, pos, e) {
+    # skip past first atom (number/string/ident/paren)
+    if (src[pos] == 40) {
+        d = 1
+        pos = pos + 1
+        loop(pos < e && d > 0) {
+            if (src[pos] == 40) { d = d + 1 }
+            if (src[pos] == 41) { d = d - 1 }
+            pos = pos + 1
+        }
+    } elif (src[pos] == 34) {
+        pos = pos + 1
+        loop(pos < e && src[pos] != 34) { pos = pos + 1 }
+        pos = pos + 1
+    } elif (src[pos] >= 48 && src[pos] <= 57) {
+        loop(pos < e && src[pos] >= 48 && src[pos] <= 57) { pos = pos + 1 }
+    } elif (src[pos] >= 97 && src[pos] <= 122) {
+        loop(pos < e && src[pos] >= 97 && src[pos] <= 122) { pos = pos + 1 }
+    }
+    loop(pos < e && src[pos] == 32) { pos = pos + 1 }
+    if (pos < e) {
+        ch = src[pos]
+        if (ch == 43 || ch == 45 || ch == 42 || ch == 47) { send pos }
+        if (ch == 61 && pos + 1 < e && src[pos + 1] == 61) { send pos }
+        if (ch == 33 && pos + 1 < e && src[pos + 1] == 61) { send pos }
+        if (ch == 60 && pos + 1 < e && src[pos + 1] == 61) { send pos }
+        if (ch == 62 && pos + 1 < e && src[pos + 1] == 61) { send pos }
+        if (ch == 60) { send pos }
+        if (ch == 62) { send pos }
+        if (ch == 38 && pos + 1 < e && src[pos + 1] == 38) { send pos }
+        if (ch == 124 && pos + 1 < e && src[pos + 1] == 124) { send pos }
+    }
+    send e
 }
 
 task eol(src, pos, be) {
