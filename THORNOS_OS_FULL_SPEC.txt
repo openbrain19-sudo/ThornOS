@@ -1,0 +1,450 @@
+================================================================================
+          THORNOS OPERATING SYSTEM - COMPLETE SYSTEM SPECIFICATION
+================================================================================
+Document Revision: 5.0.0
+Architect: anon
+Language Stack: softrose (mid-level, .rose), thornasm (x86-64 assembly, .tsm)
+Build Stack: softrose (.rose) -> thornasm (.tsm) -> x86-64 binary
+Kernel Type: microkernel
+Target Display: 4:3, 1440x1080, 16-bit high color (rgb565)
+Logo: a thornbug, a stylized bug mascot
+================================================================================
+
+================================================================================
+1. SYSTEM PHILOSOPHY
+================================================================================
+
+ThornOS is a high-integrity, minimalist workstation operating system built 
+from the ground up for engineers, developers, and power users who want complete 
+control over their machine. it rejects the modern trend of hiding system 
+complexity behind friendly abstractions. instead, it treats computational 
+resources, user time, and human attention as finite physical properties that 
+must be monitored, measured, and managed.
+
+the system is designed as a "cockpit control deck" rather than a traditional 
+desktop. on top of normal overlapping windows, thornos provides a start menu 
+that acts as a centralized command panel. it pops up when you need it and 
+disappears when you dont, keeping the workspace clean and focused.
+
+the core tenets are performance transparency, cognitive shielding (active 
+filtering of noise to protect focus), and adaptive symbiosis where the system 
+learns from the user to reduce friction without manual configuration.
+
+================================================================================
+2. KERNEL ARCHITECTURE
+================================================================================
+
+type: pure microkernel
+  - only ipc, basic memory management, and the scheduler run in ring 0
+  - everything else (file systems, drivers, network, deisplays) run as 
+    isolated user-space services
+  - a crash in /software/ cannot penetrate /system/
+
+language stack:
+  - softrose: a mid-level language designed for memory safety and direct 
+    hardware control. used for system services and applications. compiles 
+    .rose source to thornasm assembly
+  - thornasm: a specialized x86-64 assembly syntax used for kernel entry points, 
+    bootloader, and hardware abstraction layers. compiles .tsm source to flat 
+    binary or ELF
+
+build stack:
+  softrose (.rose) -> thornasm (.tsm) -> x86-64 binary
+
+executable formats:
+  - .dpx: thornos executable (applications)
+  - .dps: thornos system service (drivers, background daemons)
+  - .dpk: thornos package (archive format for distribution)
+
+================================================================================
+3. FILE SYSTEM STRUCTURE
+================================================================================
+
+thornos abandons the traditional c:\ or /root/ sprawl for a logic-based 
+four-pillar root structure:
+
+/home/
+  the private vault. contains all user-specific personal data, documents, 
+  and work files. organized by user account.
+  structure:
+    /home/[user]/
+    /home/[user]/work/
+    /home/[user]/pictures/
+    /home/[user]/config/
+
+/software/
+  the utility belt. contains all user-installed .dpx applications. kept 
+  completely distinct from system files to prevent dependency conflicts.
+  structure:
+    /software/[appname].dpx
+    /software/[appname]/ (for multi-file applications)
+
+/system/
+  the engine room. contains kernel binaries, drivers, core services, and 
+  system-level configuration.
+  structure:
+    /system/kernel/
+    /system/drivers/
+    /system/thornbug/          (the thorn bug assistant lives here)
+    /system/thornbug/thornbug.dps   (the thorn bug's neural network and heuristic engine)
+    /system/lib/          (shared system libraries)
+
+/shared/
+  the common ground. used for inter-process communication, shared assets 
+  between applications, and cross-user data exchange.
+  structure:
+    /shared/stopgap/      (transient data buffer, automatically cleaned)
+    /shared/temp/
+    /shared/appdata/
+
+the stopgap directory is a specialized high-speed buffer for temporary files. 
+it is automatically triaged and cleaned by the thorn bug. files that sit 
+too long or are never referenced are flagged for deletion.
+
+================================================================================
+4. FILE IDENTITY SYSTEM
+================================================================================
+
+thornos uses a multimodal marker system for instant file identification. 
+three visual channels work together to ensure accessibility:
+
+4a. EXTENSION SYSTEM
+  .dpx - thornos executable (applications)
+  .dps - thornos system service (drivers, daemons)
+  .txt - plain text
+  (other standard extensions supported)
+
+4b. COLOR CODING
+  red   - system files and critical binaries
+  blue  - image files and media
+  white - user documents and standard data
+  green - configuration files
+
+4c. PATTERN OVERLAYS
+  executables (.dpx, .dps) display a distinct black and grey diagonal 
+  hazard stripe pattern. this ensures instant identification regardless 
+  of color blindness or display conditions. the pattern overlays the 
+  filename text at a low opacity to maintain readability.
+
+this three-channel approach provides redundant identification paths. a user 
+who cannot distinguish red from green can still identify system files by the 
+hazard stripe pattern or by reading the extension directly.
+
+5. MEMORY MANAGEMENT (THMALLOC)
+================================================================================
+
+thornos splits memory management into two layers:
+
+kernel space uses a buddy allocator. classic binary buddy splitting and 
+merging, fast and simple for the low-level power management that has to run 
+in ring 0.
+
+userland uses thmalloc, the custom allocator designed for thornos apps.
+
+5a. THMALLOC DESIGN
+
+thmalloc is a table-based allocator. it keeps a tiny, dedicated region of 
+memory that acts as the allocation table. the table stores ranges as 
+[start, size] pairs instead of a dense per-bit bitmap. this keeps the 
+bookkeeping overhead tiny and the lookup logic readable.
+
+state is always written as pairs in order:
+  empty pool:            0 64000
+  one used chunk:        10 10 64000
+  several used chunks:   10 10 20 20 30 30
+
+when a chunk is freed, adjacent free ranges merge into one contiguous 
+range and the table is rewritten:
+  free 20-30 out of "10 10 20 20 30 30" -> "10 30 30 30"
+  (10-20 used, then 20-30 free merged with 30-40 free)
+
+this means free space is always represented as run-length pairs, so finding 
+room for a new allocation is a single scan over the table looking for a 
+range big enough. no free lists, no bitmap walks, no pointer chasing.
+
+5b. THREADING MODEL
+
+the shared pool is split into per-thread sections so threads never fight 
+over the same table entries. each running thread owns its own pool region, 
+which means no locks are needed for normal allocate/free operations.
+
+when a thread exhausts its pool, it sends a request to the refill thread. 
+the refill thread tops the pool back up from the global free pool. the 
+normal thread retries its allocation until the refill lands. this gives 
+the lock-free fast path for the common case and a single serialized point 
+only when pools run dry.
+
+the per-thread stack is handled the same way - split up per thread so an 
+app never walks over another thread's frames.
+
+5c. FAST REGISTERS (M1 / M2)
+
+registers r12 and r13 are renamed m1 and m2 (main 1, main 2). the os 
+scores running workloads by power usage, importance, and activity. the top 
+two processes get to use m1 and m2 as their dedicated fast registers for 
+hot loops; everything else drops into the stack. this avoids cache and 
+locking costs for the heaviest work while keeping register pressure low.
+
+================================================================================
+6. USER INTERFACE - THE COCKPIT LAYOUT
+================================================================================
+
+the thornos interface is a fixed, dashboard-style layout designed for focus 
+and immediacy. the display is 1440x1080 at 16-bit high color (rgb565, meaning 
+5 bits red, 6 bits green, 5 bits blue for 65,536 total colors). this color 
+depth is chosen because it fits exactly into a 2-byte word, making pixel 
+blitting in assembly extremely fast without the alignment headaches of 24-bit 
+or the transparency math overhead of 32-bit color.
+
+6a. THE START MENU
+
+there is a start button on the taskbar. clicking it opens the start menu, which 
+pops up over the workspace like a panel. clicking away from it closes it.
+
+the start menu contains everything you need to launch stuff and manage the 
+system, all in one vertical panel:
+
+top section - user profile:
+  - displays the active user handle ("anon")
+  - profile picture frame
+
+telemetry hub:
+  - real-time clock in 24-hour format
+  - network ping counter showing live connectivity status
+
+app shortcuts zone:
+  - a list of pinned and recently used applications
+  - you can rearrange them, pin new ones, or remove ones you dont use
+
+file tree:
+  - the virtual file system hierarchy rendered as indented nodes
+  - you can browse directories and launch files directly from here
+  - tactile scrollbar with up/down arrow blocks and a pattern-shaded thumb
+
+the bottom section has a toggle area that switches between the tiny file 
+explorer or a terminal. you can also mix and match, showing just shortcuts, 
+just explorer, just terminal, or a split of any two. from the tiny explorer 
+you can find files and pin them to the shortcuts above.
+
+"going away" panel (very bottom of the menu):
+  - hibernate button (power state save to disk)
+  - restart button (warm reboot)
+  - shutdown button (full power down)
+  - all three are rendered as circular glyphs with a clean, physical feel
+
+6b. THE TASKBAR (bottom)
+
+a horizontal instrumentation deck running the full width of the screen. on 
+the far left is the start button. the rest of the taskbar shows minimized 
+application tabs. clicking a tab restores the window.
+
+================================================================================
+7. WINDOW MANAGEMENT SYSTEM
+================================================================================
+
+every application window in thornos is treated as an instrumented software 
+machinery panel. the window title bar functions as a live diagnostic dashboard 
+for the specific process it contains.
+
+7a. TITLE BAR LAYOUT
+
++------------------------------------------------------------------+
+| [graph] [o o o]  application name          [*] [r] [_] [x]      |
++------------------------------------------------------------------+
+
+left side:
+  - process performance graph: a mini pixel-mapped bar graph showing 
+    cpu consumption for this specific window only
+  - three hardware status leds:
+      led 1 (disk i/o): flickers during storage read/write operations
+      led 2 (peripheral/usb): lights up during usb or bus communication
+      led 3 (network/ipc): flashes during inter-process messaging
+
+center:
+  - the application name string in clean bitmap font
+
+right side (four thread-control buttons):
+  [*] freeze (snowflake glyph)
+      completely pauses the application thread. the kernel stops allocating 
+      cpu cycles to this process. the program state is preserved in memory 
+      at 0% resource usage. clicking again thaws the app instantly.
+
+  [r] restart (reload glyph)
+      immediate hot-reload. forcefully terminates the app, clears its cache,
+      and re-executes the binary in the exact same window frame. perfect for
+      testing code changes or recovering from a frozen loop.
+
+  [_] minimize
+      compresses the window into a tab in the bottom taskbar tray.
+
+  [x] kill
+      un-interceptable kernel-level termination. bypasses all prompts and 
+      instantly purges the process from memory.
+
+7b. WINDOW BEHAVIOR
+
+windows overlap freely like any normal operating system. there is no snapping 
+or grid system. you can move and resize windows wherever you want on the 
+screen.
+
+there is no dedicated maximize button. double-clicking the application title 
+text toggles between a custom size and fullscreen. double-clicking again 
+reverts to the previous size and position.
+
+if a window is behind several others and not being used, it automatically 
+minimizes after a period of time to keep the workspace from getting 
+cluttered. you can turn this feature off in settings.
+
+================================================================================
+8. THE THORN BUG ASSISTANT
+================================================================================
+
+the thorn bug (often just called thornbug) is a behavioral learning mascot 
+that functions as the bridge between the user and the operating system. he 
+is stored at /system/thornbug/thornbug.dps and runs as a background service 
+in the microkernel architecture.
+
+8a. ARCHITECTURE
+
+a hybrid learning engine combining two systems:
+  - a small local neural network for complex pattern recognition
+  - a heuristic engine for frequency-based automation of simple tasks
+
+this hybrid approach is intentional. using a full neural network for 
+everything would be overkill and waste resources. simple tasks like "move 
+this file type to this folder" are handled by lightweight heuristics. only 
+complex context-dependent behavior uses the neural network.
+
+8b. CORE BEHAVIORS
+
+resource management:
+  - reduces cpu/gpu power consumption during mundane tasks like text editing
+  - routes video decoding directly to hardware to prevent unnecessary spikes
+  - suspends background thread execution for minimized windows (0% cpu usage
+    for hidden apps)
+  - monitors system thermals and fan profiles, keeping the machine silent
+    during low-power tasks
+
+behavioral learning:
+  - learns app launch patterns. if you open an app every time you boot the
+    computer, the thorn bug starts it for you automatically
+  - adapts the ui layout. if you only use the start menu for shortcuts and
+    the terminal, the thorn bug swaps out the file explorer for the terminal by default
+  - learns daily schedules. if you play a specific game at the same time
+    every day, the thorn bug asks if you want to launch it
+  - learns cleanup habits. if you close all apps except messenger before
+    focusing, the thorn bug offers to do that for you
+
+file management:
+  - watches storage patterns and learns where specific file types belong
+  - automatically routes incoming files from stopgap to the correct pillar
+    based on learned behavior
+
+feedback loop:
+  - the user can correct the thorn bug if they disagree with an action
+  - the thorn bug adjusts future behavior based on the correction
+  - the neural network updates its weights accordingly
+
+notification gatekeeping:
+  - the thorn bug acts as a filter between the system and the user
+  - during deep work periods, only "serious" notifications get through
+  - a serious event is defined as something requiring immediate attention
+    (kernel panic risk, critical hardware failure, etc.)
+  - the user can set the thorn bug to "silent mode" where only emergencies bypass
+    the filter
+
+8c. THE THORN BUG'S VISUAL PRESENCE
+
+the thorn bug is an insect-themed mascot that appears in the interface during:
+  - system notifications (subtle appearance in the header area)
+  - serious events (moves to center, presents "fix" or "observe" options)
+  - learning moments (indicates when a new pattern has been recognized)
+
+his expression changes subtly based on system load and user activity.
+
+================================================================================
+9. CORE APPLICATION SUITE
+================================================================================
+
+9a. THE 3D RENDERER PANEL
+
+a high-performance tool for viewing and testing 3D assets and geometry.
+  - renders vector coordinates and polygons using an optimized pipeline
+  - title bar hardware LEDs show real-time disk streaming (led 1) and
+    processing load (graph)
+  - if a render gets stuck, the restart button instantly flushes and reloads
+
+9b. PL STUDIO (PROGRAMMING LATTICE STUDIO)
+
+the native development environment for writing softrose and thornasm code.
+  - split-pane layout with source editor on left, compiler readouts on right
+  - integrates with window-level thread tools for rapid iteration:
+      - write code, compile, hit restart on the title bar to hot-reload
+      - freeze competing apps to channel 100% cpu into compilation
+  - syntax highlighting for softrose and thornasm
+
+9c. THE PICTURES MANAGER
+
+a native image browser that works with the file tree in the start menu.
+  - clicking a directory in the start menu's file tree populates the viewer
+  - uses block-based rendering for fast scrolling and sorting
+  - supports thornos' native image format
+
+================================================================================
+10. COLOR AND DISPLAY SPECIFICATIONS
+================================================================================
+
+resolution: 1440x1080 (fixed 4:3 aspect ratio)
+color depth: 16-bit high color (rgb565)
+  - red:   5 bits (32 levels)
+  - green: 6 bits (64 levels, optimized for human vision)
+  - blue:  5 bits (32 levels)
+  - total: 65,536 colors
+
+the rgb565 format is chosen because:
+  - every pixel is exactly 2 bytes, aligning perfectly with cpu word sizes
+  - no alpha channel, so no transparency math in the rendering pipeline
+  - significantly easier to code in assembly than 24-bit (which causes
+    alignment headaches) or 32-bit (which wastes cache space)
+  - more than enough color depth for a clean ui without banding
+
+================================================================================
+11. SYSTEM PERFORMANCE PRIORITIES
+================================================================================
+
+the thorn bug manages three core priorities:
+
+priority 1 - resource thriftiness:
+  - downclock cpu/gpu during text editing, note taking, and other light tasks
+  - route video decoding directly to hardware decode blocks
+  - suspend minimized windows at the kernel level (0% cpu consumption)
+  - aggressively clear the stopgap buffer to maintain low ram overhead
+
+priority 2 - behavioral adaptability:
+  - index app launches, ui layout preferences, and usage timing
+  - adapt the cockpit ui and menu layout to match actual usage patterns
+  - trigger predictive shortcuts based on learned schedules
+  - automate window clearing based on observed focus routines
+
+priority 3 - automated file routing:
+  - watch storage patterns continuously
+  - automatically route incoming files from stopgap to the correct pillar
+  - match file extensions and name patterns to directory destinations
+  - learn from corrections and adjust routing rules dynamically
+
+================================================================================
+12. SECURITY MODEL
+================================================================================
+
+the microkernel architecture provides inherent security through isolation:
+  - a crash or compromise in /software/ cannot touch /system/
+  - no process has direct hardware access unless routed through system services
+  - ipc is the only communication channel between services
+  - the kernel validates all inter-process messages at the routing level
+
+the start menu user profile block serves as a visual security indicator,
+displaying the active session and directory ownership.
+
+================================================================================
+                      END OF COMPLETE SYSTEM SPECIFICATION
+================================================================================
