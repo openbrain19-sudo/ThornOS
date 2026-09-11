@@ -1,75 +1,67 @@
 #!/usr/bin/env python3
-"""Build ThornOS - writes boot sector directly."""
+"""Build ThornOS - assembles bootloader + kernel, creates floppy image."""
+import subprocess
 import struct
 import os
+import sys
 
-def build():
-    sector = bytearray(512)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+NASM = 'nasm'
 
-    # FAT12 BPB (bytes 0-61)
-    sector[0:3] = b'\xEB\x3C\x90'
-    sector[3:11] = b'THORNOS '
-    struct.pack_into('<H', sector, 11, 512)
-    sector[13] = 1
-    struct.pack_into('<H', sector, 14, 1)
-    sector[16] = 2
-    struct.pack_into('<H', sector, 17, 224)
-    struct.pack_into('<H', sector, 19, 2880)
-    sector[21] = 0xF0
-    struct.pack_into('<H', sector, 22, 9)
-    struct.pack_into('<H', sector, 24, 18)
-    struct.pack_into('<H', sector, 26, 2)
-    struct.pack_into('<I', sector, 28, 0)
-    struct.pack_into('<I', sector, 32, 0)
-    sector[36] = 0x80
-    sector[38] = 0x29
-    struct.pack_into('<I', sector, 39, 0x12345678)
-    sector[43:54] = b'THORNOS    '
-    sector[54:62] = b'FAT12   '
+def run(cmd, desc):
+    print(f"  {desc}...")
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=SCRIPT_DIR)
+    if result.returncode != 0:
+        print(f"  ERROR: {result.stderr}")
+        sys.exit(1)
+    if result.stdout.strip():
+        print(f"    {result.stdout.strip()}")
 
-    # String at offset 0xBE
-    string = b'Greetings, from ThornOS\n\x00'
-    sector[0xBE:0xBE+len(string)] = string
+def main():
+    print("=== Building ThornOS ===\n")
 
-    # Build code at offset 0x3E
-    # All offsets are relative to 0x3E
-    code = bytearray()
+    # Check for nasm
+    try:
+        subprocess.run([NASM, '--version'], capture_output=True)
+    except FileNotFoundError:
+        print("ERROR: nasm not found. Install with: winget install nasm")
+        sys.exit(1)
 
-    # Clear screen: int 10h, AH=00h, AL=03h (80x25 text mode)
-    code += b'\xB4\x00'              # mov ah, 0x00
-    code += b'\xB0\x03'              # mov al, 0x03
-    code += b'\xCD\x10'              # int 0x10
+    # Step 1: Assemble bootloader
+    print("1. assembling bootloader")
+    run([NASM, '-f', 'bin', 'boot.asm', '-o', 'boot.bin'], 'boot.asm -> boot.bin')
 
-    code += b'\xBE\xBE\x7C'          # mov si, 0x7CBE
+    # Step 2: Assemble kernel
+    print("2. assembling kernel")
+    run([NASM, '-f', 'bin', 'kernel.asm', '-o', 'kernel.bin'], 'kernel.asm -> kernel.bin')
 
-    loop_off = len(code)              # 3
-    code += b'\xAC'                   # 3: lodsb
-    code += b'\x84\xC0'              # 4: test al, al
-    code += b'\x74\x08'              # 9: jz +8 -> hlt
-    code += b'\xB4\x0E'              # 8: mov ah, 0x0E
-    code += b'\x30\xFF'              # 10: xor bh, bh
-    code += b'\xCD\x10'              # 12: int 0x10
-    jmp_back = loop_off - len(code) - 2
-    code += b'\xEB' + struct.pack('b', jmp_back)  # 14: jmp loop
-    code += b'\xF4'                  # 16: hlt
+    # Step 3: Create floppy image
+    print("3. creating floppy image")
+    boot = open(os.path.join(SCRIPT_DIR, 'boot.bin'), 'rb').read()
+    kernel = open(os.path.join(SCRIPT_DIR, 'kernel.bin'), 'rb').read()
 
-    print(f"   code: {len(code)} bytes")
+    print(f"    boot: {len(boot)} bytes, kernel: {len(kernel)} bytes")
 
-    sector[0x3E:0x3E+len(code)] = code
-
-    sector[510] = 0x55
-    sector[511] = 0xAA
-
+    # 1.44MB floppy
     floppy = bytearray(1474560)
-    floppy[:512] = sector
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    img_path = os.path.join(script_dir, '..', 'ThornOS.img')
+    # Boot sector at sector 0
+    floppy[:len(boot)] = boot
+
+    # Kernel at sector 2 (offset 1024)
+    floppy[1024:1024+len(kernel)] = kernel
+
+    # Boot signature
+    floppy[510] = 0x55
+    floppy[511] = 0xAA
+
+    img_path = os.path.join(SCRIPT_DIR, '..', 'ThornOS.img')
     with open(img_path, 'wb') as f:
         f.write(floppy)
-    print(f"   created {img_path}")
+    print(f"    created ThornOS.img ({len(floppy)} bytes)")
+
+    print(f"\n4. done!")
+    print(f"   test: qemu-system-x86_64 -fda ThornOS.img")
 
 if __name__ == '__main__':
-    print("building ThornOS...")
-    build()
-    print("done!")
+    main()

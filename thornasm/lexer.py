@@ -15,6 +15,7 @@ class TokenType(Enum):
     MINUS = auto()
     COLON = auto()
     CMP_OP = auto()
+    COMMA = auto()
     NEWLINE = auto()
     EOF = auto()
 
@@ -166,6 +167,11 @@ class Lexer:
 
             if ch == ':':
                 tokens.append(Token(TokenType.COLON, ':', self.line))
+                self.advance()
+                continue
+
+            if ch == ',':
+                tokens.append(Token(TokenType.COMMA, ',', self.line))
                 self.advance()
                 continue
 

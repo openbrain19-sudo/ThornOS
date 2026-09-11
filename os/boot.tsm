@@ -1,34 +1,235 @@
+# ThornOS Bootloader + Kernel
+# Built entirely in ThornASM
+
+bits 16
 origin 0x7C00
 
+module data
+    msg_loading "Loading ThornOS..."
+    msg_ready "ThornOS ready. Type something:"
+    msg_newline "\n"
+    msg_exception "EXCEPTION"
+    scancodes "\0\01234567890-=\0\0qwertyuiop[]\0\0asdfghjkl;'`\0\\zxcvbnm,./\0*"
+
+module reserve
+    _stack 65536
+    _idt 2048
+    _cursor 4
+
 module code
+    # 16-bit bootloader
     fn global _start
     start
-        # print greeting using BIOS int 10h
-        # string is embedded after this code
-        move r1 0
-
-    print_loop:
-        # calculate string address: current position + offset to string
-        # string is at a fixed position after the code
-        move r2 0x7C00
-        add r2 0x3E       # offset past BPB area
-        add r2 r1         # + character index
-        add r2 code_size  # + code size (will be patched)
-        move.1 ret [r2]
-
-        cmp ret == 0 go done
-
-        move r3 ret
-        move ret 0x0E
-        move dst 0
-        move dta 0x07
-        move src r3
+        # Clear screen
+        move ret 0x00
+        move dst 0x03
         int 0x10
 
-        inc r1
-        go print_loop
+        # Print loading
+        lma src msg_loading
+        call bios_print
 
-    done:
+        # Load kernel from disk
+        move ret 0x02
+        move dta 20
+        move cnt 0
+        move r1 2
+        move src 0
+        move r2 0x80
+        move r3 0x1000
+        move r4 0
+        int 0x13
+
+        # Print ready
+        lma src msg_ready
+        call bios_print
+
+        # Halt (TODO: switch to protected mode)
         hlt
+    end
 
-    code_size:
+    fn global bios_print
+    start
+        move r5 0
+        bios_print_loop:
+            move.1 ret [src + r5]
+            cmp ret == 0 go bios_print_done
+            move r6 ret
+            move ret 0x0E
+            move dst 0
+            move dta 0x07
+            move src r6
+            int 0x10
+            inc r5
+            go bios_print_loop
+        bios_print_done:
+            return
+    end
+
+    # 32-bit kernel
+    fn global pm_start
+    start
+        move ds 0x10
+        move es 0x10
+        move fs 0x10
+        move gs 0x10
+        move ss 0x10
+        move stp 0x90000
+        call vga_clear
+        lma src msg_ready
+        move ret 0
+        move r1 0x0A
+        call vga_print
+        call setup_idt
+        sti
+        cli_loop:
+            go cli_loop
+    end
+
+    fn global vga_clear
+    start
+        move r1 0
+        vga_clear_loop:
+            cmp r1 4000 go vga_clear_done
+            move r2 0xB8000
+            add r2 r1
+            move.1 [r2] 32
+            inc r1
+            move r2 0xB8000
+            add r2 r1
+            move.1 [r2] 0x07
+            inc r1
+            go vga_clear_loop
+        vga_clear_done:
+            return
+    end
+
+    fn global vga_print
+    start
+        move r3 ret
+        vga_print_loop:
+            move.1 ret [src]
+            cmp ret == 0 go vga_print_done
+            cmp ret == 10 go vga_newline
+            move r2 0xB8000
+            add r2 r3
+            move.1 [r2] ret
+            inc r2
+            move.1 [r2] r1
+            inc r3
+            inc src
+            go vga_print_loop
+        vga_newline:
+            move ret r3
+            move r4 80
+            div r4
+            inc ret
+            mul r4
+            move r3 ret
+            inc src
+            go vga_print_loop
+        vga_print_done:
+            return
+    end
+
+    fn global setup_idt
+    start
+        move r1 0
+        idt_loop:
+            cmp r1 256 go idt_done
+            move r2 _idt
+            move r3 r1
+            mul r3 8
+            add r2 r3
+            move r3 exception_handler
+            move.2 [r2] r3
+            move r4 r3
+            shr r4 16
+            move.2 [r2 + 6] r4
+            move.2 [r2 + 2] 0x08
+            move.1 [r2 + 4] 0
+            move.1 [r2 + 5] 0x8E
+            inc r1
+            go idt_loop
+        idt_done:
+            move r2 _idt
+            move r3 33
+            mul r3 8
+            add r2 r3
+            move r3 keyboard_handler
+            move.2 [r2] r3
+            move r4 r3
+            shr r4 16
+            move.2 [r2 + 6] r4
+            call setup_pic
+            return
+    end
+
+    fn global setup_pic
+    start
+        move ret 0x11
+        out 0x20 ret
+        move ret 0x20
+        out 0x21 ret
+        move ret 0x04
+        out 0x21 ret
+        move ret 0x01
+        out 0x21 ret
+        move ret 0x00
+        out 0x21 ret
+        move ret 0x11
+        out 0xA0 ret
+        move ret 0x28
+        out 0xA1 ret
+        move ret 0x02
+        out 0xA1 ret
+        move ret 0x01
+        out 0xA1 ret
+        move ret 0x00
+        out 0xA1 ret
+        return
+    end
+
+    fn global exception_handler
+    start
+        pusha
+        lma src msg_exception
+        move ret 800
+        move r1 0x0C
+        call vga_print
+        popa
+        iret
+    end
+
+    fn global keyboard_handler
+    start
+        pusha
+        move ret 0x60
+        in ret ret
+        move r1 ret
+        and r1 0x80
+        cmp r1 != 0 go kb_done
+        move r1 ret
+        lma r2 scancodes
+        add r2 r1
+        move.1 ret [r2]
+        cmp ret == 0 go kb_done
+        move r2 ret
+        move r3 0xB8000
+        lma r4 _cursor
+        move.4 ret [r4]
+        mul ret 2
+        add r3 ret
+        move.1 [r3] r2
+        inc r3
+        move.1 [r3] 0x0F
+        lma r4 _cursor
+        move.4 ret [r4]
+        inc ret
+        move.4 [r4] ret
+        kb_done:
+            move ret 0x20
+            out 0x20 ret
+            popa
+            iret
+    end

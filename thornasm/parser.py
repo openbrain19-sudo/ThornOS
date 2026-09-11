@@ -359,6 +359,50 @@ class Parser:
                 address = self.parse_operand()
                 nodes.append(OriginNode(address=address))
                 continue
+            if tok.type == TokenType.IDENT and tok.value == 'bits':
+                self.advance()
+                mode = self.advance().value
+                nodes.append(BitsNode(mode=int(mode)))
+                continue
+            if tok.type == TokenType.IDENT and tok.value == 'db':
+                self.advance()
+                vals = []
+                while self.peek() and self.peek().type not in (TokenType.NEWLINE, TokenType.EOF):
+                    vals.append(self.parse_operand())
+                    if self.peek() and self.peek().type == TokenType.COMMA:
+                        self.advance()
+                nodes.append(DataByteNode(values=vals))
+                continue
+            if tok.type == TokenType.IDENT and tok.value == 'dw':
+                self.advance()
+                vals = []
+                while self.peek() and self.peek().type not in (TokenType.NEWLINE, TokenType.EOF):
+                    vals.append(self.parse_operand())
+                    if self.peek() and self.peek().type == TokenType.COMMA:
+                        self.advance()
+                nodes.append(DataWordNode(values=vals))
+                continue
+            if tok.type == TokenType.IDENT and tok.value == 'dd':
+                self.advance()
+                vals = []
+                while self.peek() and self.peek().type not in (TokenType.NEWLINE, TokenType.EOF):
+                    vals.append(self.parse_operand())
+                    if self.peek() and self.peek().type == TokenType.COMMA:
+                        self.advance()
+                nodes.append(DataDwordNode(values=vals))
+                continue
+            if tok.type == TokenType.IDENT and tok.value == 'times':
+                self.advance()
+                count = self.parse_operand()
+                # next should be db/dw/dd and values
+                inner_tok = self.advance()
+                vals = []
+                while self.peek() and self.peek().type not in (TokenType.NEWLINE, TokenType.EOF):
+                    vals.append(self.parse_operand())
+                    if self.peek() and self.peek().type == TokenType.COMMA:
+                        self.advance()
+                nodes.append(TimesNode(count=count, dtype=inner_tok.value, values=vals))
+                continue
             if tok.type == TokenType.IDENT and tok.value == 'module':
                 self.advance()
                 kind = self.advance().value

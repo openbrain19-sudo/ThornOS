@@ -4,27 +4,32 @@ from parser import Parser
 from lexer import tokenize_source
 
 # ──────────────────────────────────────────────
+#  Global mode (set by bits directive)
+# ──────────────────────────────────────────────
+CURRENT_BITS = 64
+
+# ──────────────────────────────────────────────
 #  Register encoding
 # ──────────────────────────────────────────────
 
 REG_MAP = {
-    'ret': 0,   'rax': 0,
-    'r1':  3,   'rbx': 3,
-    'cnt': 1,   'rcx': 1,
-    'dta': 2,   'rdx': 2,
-    'src': 6,   'rsi': 6,
-    'dst': 7,   'rdi': 7,
+    'ret': 0,   'rax': 0,   'eax': 0,   'ax': 0,    'al': 0,
+    'r1':  3,   'rbx': 3,   'ebx': 3,   'bx': 3,    'bl': 3,
+    'cnt': 1,   'rcx': 1,   'ecx': 1,   'cx': 1,    'cl': 1,
+    'dta': 2,   'rdx': 2,   'edx': 2,   'dx': 2,    'dl': 2,
+    'src': 6,   'rsi': 6,   'esi': 6,   'si': 6,
+    'dst': 7,   'rdi': 7,   'edi': 7,   'di': 7,
     'r2':  8,   'r8':  8,
     'r3':  9,   'r9':  9,
     'r4':  10,  'r10': 10,
     'r5':  11,  'r11': 11,
     'r6':  12,  'r12': 12,
     'r7':  13,  'r13': 13,
-    # r14, r15 unused by SPINE-64 naming (r8/r9 already taken)
-    'stp': 4,   'rsp': 4,
-    'sbp': 5,   'rbp': 5,
-    'm1':  -1,
-    'm2':  -2,
+    'stp': 4,   'rsp': 4,   'esp': 4,   'sp': 4,
+    'sbp': 5,   'rbp': 5,   'ebp': 5,   'bp': 5,
+    'cs': 100, 'ds': 101, 'es': 102, 'fs': 103, 'gs': 104, 'ss': 105,
+    'm1':  -1,  'm2':  -2,
+    'cr0': 200, 'cr2': 202, 'cr3': 203, 'cr4': 204,
 }
 
 FLOAT_REG_MAP = {
@@ -190,17 +195,36 @@ SPECIAL_RMS = {4: 'rsp', 5: 'rbp'}
 
 
 def encode_reg_reg(opcode, dst_val, src_val, w=1):
-    """Encode reg, reg instruction. For opcode 89/01/29/etc: reg=source, rm=destination."""
+    """Encode reg, reg instruction."""
+    global CURRENT_BITS
     dst_id = reg_num(dst_val)
     src_id = reg_num(src_val)
     code = bytearray()
-    r = (src_id >> 3) & 1  # REX.R for source (reg field)
-    b = (dst_id >> 3) & 1  # REX.B for destination (rm field)
-    if w or needs_rex(dst_id) or needs_rex(src_id):
-        code.append(rex_byte(1 if w else 0, r, 0, b))
-    code.append(opcode)
-    code.append(modrm(3, src_id & 7, dst_id & 7))  # reg=src, rm=dst
-    return code
+
+    if CURRENT_BITS == 16:
+        # 16-bit: no REX prefix, use 16-bit registers
+        # For 16-bit mov: opcode is same, no REX
+        code.append(opcode)
+        code.append(modrm(3, src_id & 7, dst_id & 7))
+        return code
+    elif CURRENT_BITS == 32:
+        # 32-bit: no REX prefix unless extended registers
+        if needs_rex(dst_id) or needs_rex(src_id):
+            r = (src_id >> 3) & 1
+            b = (dst_id >> 3) & 1
+            code.append(rex_byte(0, r, 0, b))
+        code.append(opcode)
+        code.append(modrm(3, src_id & 7, dst_id & 7))
+        return code
+    else:
+        # 64-bit: REX.W prefix
+        r = (src_id >> 3) & 1
+        b = (dst_id >> 3) & 1
+        if w or needs_rex(dst_id) or needs_rex(src_id):
+            code.append(rex_byte(1, r, 0, b))
+        code.append(opcode)
+        code.append(modrm(3, src_id & 7, dst_id & 7))
+        return code
 
 
 def encode_reg_imm8(opcode, reg_val, imm):
@@ -216,17 +240,34 @@ def encode_reg_imm8(opcode, reg_val, imm):
 
 
 def encode_reg_imm32(opcode, reg_val, imm, w=1):
-    """Encode MOV r64, imm32 (sign-extended to 64). Opcode = 0xB8 + rd. No ModR/M."""
+    """Encode MOV reg, imm. Opcode = 0xB8 + rd. No ModR/M."""
+    global CURRENT_BITS
     rid = reg_num(reg_val)
     code = bytearray()
-    b = (rid >> 3) & 1
-    if w and (b or needs_rex(rid)):
-        code.append(rex_byte(1, 0, 0, b))
-    elif not w and b:
-        code.append(rex_byte(0, 0, 0, b))
-    code.append(opcode + (rid & 7))
-    code.extend(struct.pack('<i', imm))
-    return code
+
+    if CURRENT_BITS == 16:
+        # 16-bit: mov reg16, imm16 (2-byte immediate, no REX)
+        code.append(opcode + (rid & 7))
+        code.extend(struct.pack('<H', imm & 0xFFFF))
+        return code
+    elif CURRENT_BITS == 32:
+        # 32-bit: mov reg32, imm32 (4-byte immediate, no REX unless extended)
+        b = (rid >> 3) & 1
+        if b:
+            code.append(rex_byte(0, 0, 0, b))
+        code.append(opcode + (rid & 7))
+        code.extend(struct.pack('<I', imm & 0xFFFFFFFF))
+        return code
+    else:
+        # 64-bit: mov reg64, imm64 or mov reg32, imm32
+        b = (rid >> 3) & 1
+        if w and (b or needs_rex(rid)):
+            code.append(rex_byte(1, 0, 0, b))
+        elif not w and b:
+            code.append(rex_byte(0, 0, 0, b))
+        code.append(opcode + (rid & 7))
+        code.extend(struct.pack('<i', imm))
+        return code
 
 
 def encode_reg_imm64(reg_val, imm):
@@ -414,7 +455,8 @@ class CodeGen:
         self.current_addr = base_addr
         self.data_symbols = {}
         self.data_offset = 0
-        self.code_size = 0  # computed after pass 1
+        self.code_size = 0
+        self.bits_mode = 64  # 16, 32, or 64
 
     def emit(self, code):
         self.output.extend(code)
@@ -613,6 +655,18 @@ class CodeGen:
         if isinstance(node, OriginNode):
             self.origin = parse_immediate(node.address)
             self.current_addr = self.origin
+        elif isinstance(node, BitsNode):
+            global CURRENT_BITS
+            CURRENT_BITS = node.mode
+        elif isinstance(node, DataByteNode):
+            self.current_addr += len(node.values)
+        elif isinstance(node, DataWordNode):
+            self.current_addr += len(node.values) * 2
+        elif isinstance(node, DataDwordNode):
+            self.current_addr += len(node.values) * 4
+        elif isinstance(node, TimesNode):
+            count = parse_immediate(node.count)
+            self.current_addr += count
         elif isinstance(node, ModuleNode):
             if node.kind == 'data':
                 for item in node.body:
@@ -680,11 +734,30 @@ class CodeGen:
         if isinstance(node, OriginNode):
             self.origin = parse_immediate(node.address)
             self.current_addr = self.origin
+        elif isinstance(node, BitsNode):
+            self.bits_mode = node.mode
+            global CURRENT_BITS
+            CURRENT_BITS = node.mode
+        elif isinstance(node, DataByteNode):
+            for v in node.values:
+                self.emit_byte(parse_immediate(v))
+        elif isinstance(node, DataWordNode):
+            for v in node.values:
+                self.output.extend(struct.pack('<H', parse_immediate(v) & 0xFFFF))
+                self.current_addr += 2
+        elif isinstance(node, DataDwordNode):
+            for v in node.values:
+                self.output.extend(struct.pack('<I', parse_immediate(v) & 0xFFFFFFFF))
+                self.current_addr += 4
+        elif isinstance(node, TimesNode):
+            count = parse_immediate(node.count)
+            val = parse_immediate(node.values[0]) if node.values else 0
+            for _ in range(count):
+                self.emit_byte(val)
         elif isinstance(node, ModuleNode):
             if node.kind == 'code':
                 for item in node.body:
                     self._emit_node(item)
-            # data and reserve already handled in pass 1
         elif isinstance(node, FnNode):
             for item in node.body:
                 self._emit_node(item)
@@ -890,18 +963,30 @@ class CodeGen:
     # ── lma (lea) encoding ──
 
     def _encode_lma(self, node):
+        global CURRENT_BITS
         dst, src = node.dst, node.src
         if is_reg(dst) and is_memory_operand(src):
-            # LEA r64, m
             return encode_mem_reg(0x8D, src, dst, direction=1, w=1)
-        # Symbol reference: MOV r64, imm64 (patched later)
+        # Symbol reference: MOV reg, imm (patched later)
         if is_reg(dst) and not is_reg(src) and not is_memory_operand(src):
             rid = reg_num(dst)
             code = bytearray()
-            code.append(rex_byte(1, 0, 0, (rid >> 3) & 1))
-            code.append(0xB8 + (rid & 7))
-            self.data_patches.append((len(self.output) + len(code), src))
-            code.extend(struct.pack('<q', 0))  # placeholder
+            if CURRENT_BITS == 16:
+                code.append(0xB8 + (rid & 7))
+                self.data_patches.append((len(self.output) + len(code), src))
+                code.extend(struct.pack('<H', 0))
+            elif CURRENT_BITS == 32:
+                b = (rid >> 3) & 1
+                if b:
+                    code.append(rex_byte(0, 0, 0, b))
+                code.append(0xB8 + (rid & 7))
+                self.data_patches.append((len(self.output) + len(code), src))
+                code.extend(struct.pack('<I', 0))
+            else:
+                code.append(rex_byte(1, 0, 0, (rid >> 3) & 1))
+                code.append(0xB8 + (rid & 7))
+                self.data_patches.append((len(self.output) + len(code), src))
+                code.extend(struct.pack('<q', 0))
             return code
         if is_reg(dst) and is_reg(src):
             return encode_reg_reg(0x89, dst, src, w=1)

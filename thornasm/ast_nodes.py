@@ -349,3 +349,30 @@ class DataDefNode:
 class AliasNode:
     reg: str
     name: str
+
+
+@dataclass
+class BitsNode:
+    mode: int  # 16, 32, or 64
+
+
+@dataclass
+class DataByteNode:
+    values: list
+
+
+@dataclass
+class DataWordNode:
+    values: list
+
+
+@dataclass
+class DataDwordNode:
+    values: list
+
+
+@dataclass
+class TimesNode:
+    count: str
+    dtype: str
+    values: list
